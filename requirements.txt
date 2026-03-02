@@ -1,0 +1,23 @@
+# FastAPI core
+fastapi
+uvicorn[standard]
+
+# Database
+sqlalchemy
+
+# File upload support
+python-multipart
+
+# Computer Vision
+opencv-python==4.9.0.80
+opencv-contrib-python==4.9.0.80
+Pillow
+numpy<2.0
+
+# Environment variables
+python-dotenv
+
+# Report generation
+openpyxl
+reportlab
+pandas
