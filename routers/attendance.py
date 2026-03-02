@@ -40,8 +40,8 @@ def _send_attendance_email(student: models.Student, attendance: models.Attendanc
     try:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = f"Attendance Marked - {attendance.date}"
-        msg["From"] = EMAIL_FROM
-        msg["To"] = student.email
+        msg["From"]    = EMAIL_FROM   # Display name in the header is fine
+        msg["To"]      = student.email
 
         html_body = f"""
         <html><body style="font-family: Arial, sans-serif; background:#f4f4f4; padding:20px;">
@@ -62,11 +62,13 @@ def _send_attendance_email(student: models.Student, attendance: models.Attendanc
         """
         msg.attach(MIMEText(html_body, "html"))
 
-        with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT) as server:
+        # ── KEY FIX: sendmail() envelope requires plain address, not display-name format ──
+        with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT, timeout=10) as server:
             server.ehlo()
             server.starttls()
+            server.ehlo()          # re-identify after STARTTLS
             server.login(EMAIL_USER, EMAIL_PASS)
-            server.sendmail(EMAIL_FROM, student.email, msg.as_string())
+            server.sendmail(EMAIL_USER, student.email, msg.as_string())  # EMAIL_USER not EMAIL_FROM
         return True
     except Exception as e:
         print(f"Email error for {student.email}: {e}")
