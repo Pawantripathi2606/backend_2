@@ -19,7 +19,7 @@ router = APIRouter(prefix="/recognition", tags=["Recognition"])
 
 # ─── Paths ───────────────────────────────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+MEDIA_ROOT = os.getenv("MEDIA_ROOT", os.path.join(BASE_DIR, 'media'))
 TRAINING_DIR = os.path.join(MEDIA_ROOT, 'training_data')
 MODEL_PATH = os.path.join(MEDIA_ROOT, 'models', 'classifier.xml')
 

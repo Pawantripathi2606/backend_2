@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: face-recognition-api
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: EMAIL_HOST_USER
+        sync: false
+      - key: EMAIL_HOST_PASSWORD
+        sync: false
+    disk:
+      name: media-storage
+      mountPath: /opt/render/project/src/media
+      sizeGB: 1

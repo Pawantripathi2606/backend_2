@@ -6,9 +6,9 @@ import cv2
 import numpy as np
 import os
 
-# Base directory for media files (models, training_data)
+# Use MEDIA_ROOT env var if set (Render persistent disk), else local ../media
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+MEDIA_ROOT = os.getenv("MEDIA_ROOT", os.path.join(BASE_DIR, 'media'))
 MODEL_PATH = os.path.join(MEDIA_ROOT, 'models', 'classifier.xml')
 
 
