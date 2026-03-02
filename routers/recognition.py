@@ -17,11 +17,20 @@ from utils.face_utils import FaceDetector, FaceRecognizer
 
 router = APIRouter(prefix="/recognition", tags=["Recognition"])
 
-# ─── Paths ───────────────────────────────────────────────────────────────────
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MEDIA_ROOT = os.getenv("MEDIA_ROOT", os.path.join(BASE_DIR, 'media'))
-TRAINING_DIR = os.path.join(MEDIA_ROOT, 'training_data')
-MODEL_PATH = os.path.join(MEDIA_ROOT, 'models', 'classifier.xml')
+# ─── Paths (resolved lazily so MEDIA_ROOT env var is always respected) ────────
+def get_media_root():
+    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.getenv("MEDIA_ROOT", os.path.join(base, 'media'))
+
+def get_training_dir():
+    d = os.path.join(get_media_root(), 'training_data')
+    os.makedirs(d, exist_ok=True)
+    return d
+
+def get_model_path():
+    d = os.path.join(get_media_root(), 'models')
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, 'classifier.xml')
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -44,10 +53,11 @@ def decode_base64_image(image_data: str):
 
 def count_existing_photos(student_db_id: int) -> int:
     """Count how many training photos already exist for a student db id."""
-    if not os.path.exists(TRAINING_DIR):
+    training_dir = get_training_dir()
+    if not os.path.exists(training_dir):
         return 0
     pattern = re.compile(rf'^user\.{student_db_id}\.\d+\.jpg$')
-    return len([f for f in os.listdir(TRAINING_DIR) if pattern.match(f)])
+    return len([f for f in os.listdir(training_dir) if pattern.match(f)])
 
 
 # ─── Endpoints ───────────────────────────────────────────────────────────────
@@ -62,6 +72,8 @@ def save_photo(payload: schemas.SavePhotoRequest, db: Session = Depends(get_db))
     import cv2
 
     try:
+        training_dir = get_training_dir()
+
         # Look up student
         student = db.query(models.Student).filter(
             models.Student.student_id == payload.student_id
@@ -89,10 +101,9 @@ def save_photo(payload: schemas.SavePhotoRequest, db: Session = Depends(get_db))
         face_gray = cv2.cvtColor(face_resized, cv2.COLOR_BGR2GRAY)
 
         # Save image
-        os.makedirs(TRAINING_DIR, exist_ok=True)
         photo_count = count_existing_photos(student.id) + 1
         filename = f'user.{student.id}.{photo_count}.jpg'
-        filepath = os.path.join(TRAINING_DIR, filename)
+        filepath = os.path.join(training_dir, filename)
         cv2.imwrite(filepath, face_gray)
 
         # Mark photo_samples_taken once we have >= 100 photos
@@ -113,6 +124,7 @@ def save_photo(payload: schemas.SavePhotoRequest, db: Session = Depends(get_db))
         return schemas.SavePhotoResponse(success=False, error=str(e))
 
 
+
 @router.post("/train", response_model=schemas.TrainResponse, summary="Train the face recognition model")
 def train_model(db: Session = Depends(get_db)):
     """
@@ -120,13 +132,15 @@ def train_model(db: Session = Depends(get_db)):
     Requires at least 10 images.
     """
     try:
-        if not os.path.exists(TRAINING_DIR):
+        training_dir = get_training_dir()
+
+        if not os.path.exists(training_dir):
             return schemas.TrainResponse(
                 success=False,
                 error="No training data found. Please capture photos first."
             )
 
-        image_files = [f for f in os.listdir(TRAINING_DIR) if f.endswith('.jpg')]
+        image_files = [f for f in os.listdir(training_dir) if f.endswith('.jpg')]
         if len(image_files) < 10:
             return schemas.TrainResponse(
                 success=False,
@@ -134,10 +148,9 @@ def train_model(db: Session = Depends(get_db)):
             )
 
         recognizer = FaceRecognizer()
-        success, num_images, num_students, accuracy = recognizer.train_model(TRAINING_DIR)
+        success, num_images, num_students, accuracy = recognizer.train_model(training_dir)
 
         if success:
-            # Save training record to DB
             record = models.TrainingModel(
                 model_file='media/models/classifier.xml',
                 num_students=num_students,
