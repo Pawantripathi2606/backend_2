@@ -1,15 +1,11 @@
 """
-Face detection and recognition utilities.
-Ported from Django's recognition/utils.py — no Django dependencies.
+Face detection and recognition utilities — fully DB-backed.
+No disk I/O: photos and model are stored in PostgreSQL as binary blobs.
 """
 import cv2
 import numpy as np
 import os
-
-# Use MEDIA_ROOT env var if set (Render persistent disk), else local ../media
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MEDIA_ROOT = os.getenv("MEDIA_ROOT", os.path.join(BASE_DIR, 'media'))
-MODEL_PATH = os.path.join(MEDIA_ROOT, 'models', 'classifier.xml')
+import tempfile
 
 
 class FaceDetector:
@@ -20,115 +16,91 @@ class FaceDetector:
         self.face_cascade = cv2.CascadeClassifier(cascade_path)
 
     def detect_faces(self, image, fast=False):
-        """Detect faces in an image. Returns list of (x, y, w, h).
-        fast=True uses looser params for training photo capture (3x faster).
-        """
+        """Detect faces. fast=True uses looser params (~3x faster, for bulk capture)."""
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         if fast:
-            # Faster params: larger scaleFactor + fewer minNeighbors
             faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.5, minNeighbors=3)
         else:
-            # Accurate params: for recognition
             faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=5)
         return faces
 
     def crop_face(self, image, face_coords):
-        """Crop face from image based on (x, y, w, h) coordinates."""
         x, y, w, h = face_coords
         return image[y:y + h, x:x + w]
 
-    def preprocess_face(self, face_image, size=(450, 450)):
+    def preprocess_face(self, face_image, size=(200, 200)):
         """Resize and convert face to grayscale for recognition."""
         face_resized = cv2.resize(face_image, size)
-        face_gray = cv2.cvtColor(face_resized, cv2.COLOR_BGR2GRAY)
-        return face_gray
+        if len(face_resized.shape) == 3:
+            face_resized = cv2.cvtColor(face_resized, cv2.COLOR_BGR2GRAY)
+        return face_resized
 
 
 class FaceRecognizer:
-    """Utility class for face recognition using LBPH algorithm."""
+    """LBPH face recognizer — loads/saves model from PostgreSQL bytes."""
 
     def __init__(self):
         self.recognizer = cv2.face.LBPHFaceRecognizer_create()
-        self.model_path = MODEL_PATH
+        self._loaded = False
 
-    def load_model(self) -> bool:
-        """Load trained LBPH model from disk. Returns True if loaded."""
-        if os.path.exists(self.model_path):
-            self.recognizer.read(self.model_path)
+    def load_model_from_bytes(self, model_bytes: bytes) -> bool:
+        """Load LBPH model from raw XML bytes (stored in DB). Returns True on success."""
+        if not model_bytes:
+            return False
+        try:
+            # Write to temp file, read with OpenCV, then delete
+            with tempfile.NamedTemporaryFile(suffix='.xml', delete=False) as tmp:
+                tmp.write(model_bytes)
+                tmp_path = tmp.name
+            self.recognizer.read(tmp_path)
+            os.unlink(tmp_path)
+            self._loaded = True
             return True
-        return False
+        except Exception as e:
+            print(f"Error loading model from bytes: {e}")
+            return False
 
     def recognize_face(self, face_image):
         """
-        Recognize a face image.
-        Returns (student_db_id, confidence_percentage).
+        Recognize a face. Returns (student_db_id, confidence_percentage).
         confidence_percentage: 0-100, higher is better.
         """
-        if not os.path.exists(self.model_path):
+        if not self._loaded:
             return None, 0.0
 
-        # Ensure grayscale and correct size
         if len(face_image.shape) == 3:
             face_image = cv2.cvtColor(face_image, cv2.COLOR_BGR2GRAY)
-        face_image = cv2.resize(face_image, (450, 450))
+        face_image = cv2.resize(face_image, (200, 200))
 
         student_db_id, raw_confidence = self.recognizer.predict(face_image)
+        confidence_pct = max(0.0, min(100.0, (1 - (raw_confidence / 150)) * 100))
+        return student_db_id, confidence_pct
 
-        # Convert LBPH confidence (lower is better, 0-150+) to percentage (higher is better)
-        confidence_percentage = max(0.0, min(100.0, (1 - (raw_confidence / 150)) * 100))
-        return student_db_id, confidence_percentage
-
-    def train_model(self, training_data_path: str):
+    def train_from_db_rows(self, photo_rows):
         """
-        Train the LBPH model from images in training_data_path.
-        Returns (success, num_images, num_students, accuracy_percent).
+        Train LBPH model from a list of (student_db_id, image_bytes) tuples.
+        Returns (success, model_bytes, num_images, num_students, accuracy).
         """
         faces = []
         ids = []
 
-        if not os.path.exists(training_data_path):
-            print(f"Error: Training data path does not exist: {training_data_path}")
-            return False, 0, 0, 0.0
-
-        image_files = [f for f in os.listdir(training_data_path) if f.endswith('.jpg')]
-
-        if len(image_files) == 0:
-            print("Error: No training images found")
-            return False, 0, 0, 0.0
-
-        print(f"Loading {len(image_files)} training images...")
-
-        import re
-        for image_file in image_files:
+        for student_db_id, image_bytes in photo_rows:
             try:
-                # Filename format: user.<db_id>.<photo_num>.jpg
-                parts = image_file.split('.')
-                if len(parts) < 3:
+                np_arr = np.frombuffer(image_bytes, dtype=np.uint8)
+                img = cv2.imdecode(np_arr, cv2.IMREAD_GRAYSCALE)
+                if img is None:
                     continue
-                if not parts[1].isdigit():
-                    continue
-
-                student_db_id = int(parts[1])
-                img_path = os.path.join(training_data_path, image_file)
-                img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
-
-                if img is None or img.shape[0] == 0 or img.shape[1] == 0:
-                    continue
-
-                # Resize to 200x200 — smaller file, LBPH still accurate at this size
                 img = cv2.resize(img, (200, 200))
                 faces.append(img)
                 ids.append(student_db_id)
-
             except Exception as e:
-                print(f"Warning: Error processing {image_file}: {e}")
+                print(f"Warning: skipping photo for student {student_db_id}: {e}")
                 continue
 
         if len(faces) == 0:
-            print("Error: No valid training images could be loaded")
-            return False, 0, 0, 0.0
+            return False, None, 0, 0, 0.0
 
-        print(f"Successfully loaded {len(faces)} images from {len(set(ids))} students")
+        print(f"Training on {len(faces)} images from {len(set(ids))} students...")
 
         try:
             self.recognizer.train(faces, np.array(ids))
@@ -143,15 +115,19 @@ class FaceRecognizer:
                 total = len(range(0, len(faces), 5))
                 accuracy = (correct / total) * 100 if total > 0 else 0.0
             else:
-                accuracy = 85.0  # Default for small datasets
+                accuracy = 85.0
 
-            # Save model
-            os.makedirs(os.path.dirname(self.model_path), exist_ok=True)
-            self.recognizer.write(self.model_path)
+            # Serialize model to bytes via temp file
+            with tempfile.NamedTemporaryFile(suffix='.xml', delete=False) as tmp:
+                tmp_path = tmp.name
+            self.recognizer.write(tmp_path)
+            with open(tmp_path, 'rb') as f:
+                model_bytes = f.read()
+            os.unlink(tmp_path)
 
-            print(f"Training complete! Accuracy: {accuracy:.1f}%")
-            return True, len(faces), len(set(ids)), round(accuracy, 1)
+            print(f"Training complete! Accuracy: {accuracy:.1f}%, model size: {len(model_bytes)} bytes")
+            return True, model_bytes, len(faces), len(set(ids)), round(accuracy, 1)
 
         except Exception as e:
-            print(f"Error during training: {e}")
-            return False, 0, 0, 0.0
+            print(f"Training error: {e}")
+            return False, None, 0, 0, 0.0
