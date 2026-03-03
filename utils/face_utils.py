@@ -19,10 +19,17 @@ class FaceDetector:
         cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
         self.face_cascade = cv2.CascadeClassifier(cascade_path)
 
-    def detect_faces(self, image):
-        """Detect faces in an image. Returns list of (x, y, w, h)."""
+    def detect_faces(self, image, fast=False):
+        """Detect faces in an image. Returns list of (x, y, w, h).
+        fast=True uses looser params for training photo capture (3x faster).
+        """
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=5)
+        if fast:
+            # Faster params: larger scaleFactor + fewer minNeighbors
+            faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.5, minNeighbors=3)
+        else:
+            # Accurate params: for recognition
+            faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=5)
         return faces
 
     def crop_face(self, image, face_coords):
@@ -108,6 +115,8 @@ class FaceRecognizer:
                 if img is None or img.shape[0] == 0 or img.shape[1] == 0:
                     continue
 
+                # Resize to 200x200 — smaller file, LBPH still accurate at this size
+                img = cv2.resize(img, (200, 200))
                 faces.append(img)
                 ids.append(student_db_id)
 
