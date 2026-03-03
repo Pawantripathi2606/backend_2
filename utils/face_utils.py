@@ -16,12 +16,20 @@ class FaceDetector:
         self.face_cascade = cv2.CascadeClassifier(cascade_path)
 
     def detect_faces(self, image, fast=False):
-        """Detect faces. fast=True uses looser params (~3x faster, for bulk capture)."""
+        """Detect faces. fast=True is very lenient — catches faces in small frames and poor lighting."""
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        # Histogram equalization improves detection under variable lighting
+        gray = cv2.equalizeHist(gray)
         if fast:
-            faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.5, minNeighbors=3)
+            # Very lenient params for bulk capture: fine pyramid, few neighbors, small minSize
+            faces = self.face_cascade.detectMultiScale(
+                gray, scaleFactor=1.1, minNeighbors=2, minSize=(30, 30)
+            )
         else:
-            faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=5)
+            # Accurate params for recognition
+            faces = self.face_cascade.detectMultiScale(
+                gray, scaleFactor=1.3, minNeighbors=5, minSize=(60, 60)
+            )
         return faces
 
     def crop_face(self, image, face_coords):
