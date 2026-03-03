@@ -24,29 +24,30 @@ router = APIRouter(prefix="/attendance", tags=["Attendance"])
 
 # ─── Email Config ────────────────────────────────────────────────────────────
 EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
-EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
 EMAIL_USER = os.getenv("EMAIL_HOST_USER", "pawantripathi802@gmail.com")
 EMAIL_PASS = os.getenv("EMAIL_HOST_PASSWORD", "kplopuunmezfesie")
-EMAIL_FROM = os.getenv("DEFAULT_FROM_EMAIL", f"Face Recognition System <{EMAIL_USER}>")
+EMAIL_FROM = f"Face Recognition System <{EMAIL_USER}>"
 
 
-def _send_attendance_email(student: models.Student, attendance: models.Attendance) -> bool:
+def _send_attendance_email(student: models.Student, attendance: models.Attendance):
     """
-    Send an attendance confirmation email to the student via Gmail SMTP.
-    Returns True on success, False on failure.
+    Send an attendance confirmation email via Gmail SMTP SSL (port 465).
+    Returns (True, '') on success or (False, error_message) on failure.
+    Uses SSL directly — more reliable than STARTTLS from cloud providers like Render.
     """
+    import ssl
     if not student.email:
-        return False
+        return False, "Student has no email address"
     try:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = f"Attendance Marked - {attendance.date}"
-        msg["From"]    = EMAIL_FROM   # Display name in the header is fine
-        msg["To"]      = student.email
+        msg["From"] = EMAIL_FROM
+        msg["To"] = student.email
 
         html_body = f"""
         <html><body style="font-family: Arial, sans-serif; background:#f4f4f4; padding:20px;">
         <div style="max-width:600px;margin:auto;background:#fff;border-radius:8px;padding:30px;box-shadow:0 2px 8px rgba(0,0,0,0.1);">
-            <h2 style="color:#667eea;">✅ Attendance Marked</h2>
+            <h2 style="color:#667eea;">Attendance Marked</h2>
             <p>Dear <strong>{student.name}</strong>,</p>
             <p>Your attendance has been successfully recorded.</p>
             <table style="width:100%;border-collapse:collapse;margin:20px 0;">
@@ -62,17 +63,21 @@ def _send_attendance_email(student: models.Student, attendance: models.Attendanc
         """
         msg.attach(MIMEText(html_body, "html"))
 
-        # ── KEY FIX: sendmail() envelope requires plain address, not display-name format ──
-        with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT, timeout=10) as server:
-            server.ehlo()
-            server.starttls()
-            server.ehlo()          # re-identify after STARTTLS
+        # Use SMTP_SSL port 465 — works reliably from cloud servers (Render, Heroku, etc.)
+        ssl_ctx = ssl.create_default_context()
+        with smtplib.SMTP_SSL(EMAIL_HOST, 465, context=ssl_ctx, timeout=20) as server:
             server.login(EMAIL_USER, EMAIL_PASS)
-            server.sendmail(EMAIL_USER, student.email, msg.as_string())  # EMAIL_USER not EMAIL_FROM
-        return True
+            server.sendmail(EMAIL_USER, student.email, msg.as_string())
+        return True, ""
+
+    except smtplib.SMTPAuthenticationError as e:
+        err = f"Gmail authentication failed: {e.smtp_error.decode() if hasattr(e, 'smtp_error') else str(e)}"
+        print(f"Email auth error: {err}")
+        return False, err
     except Exception as e:
-        print(f"Email error for {student.email}: {e}")
-        return False
+        err = f"{type(e).__name__}: {e}"
+        print(f"Email error for {student.email}: {err}")
+        return False, err
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -413,11 +418,11 @@ def send_email_for_record(attendance_id: int, db: Session = Depends(get_db)):
     if not student.email:
         return {"success": False, "message": f"Student {student.student_id} has no email address."}
 
-    ok = _send_attendance_email(student, record)
+    ok, err_msg = _send_attendance_email(student, record)
     if ok:
         return {"success": True, "message": f"Email sent successfully to {student.email}."}
     else:
-        return {"success": False, "message": f"Failed to send email to {student.email}."}
+        return {"success": False, "message": f"Failed to send email to {student.email}. Error: {err_msg}"}
 
 
 @router.post("/send-all-emails", summary="Send attendance emails to all records")
@@ -438,7 +443,7 @@ def send_all_emails(db: Session = Depends(get_db)):
             no_email_count += 1
             continue
         try:
-            ok = _send_attendance_email(student, record)
+            ok, _ = _send_attendance_email(student, record)
             if ok:
                 success_count += 1
             else:
