@@ -9,10 +9,16 @@ services:
         fromDatabase:
           name: face-recognition-db
           property: connectionString
+      - key: EMAIL_HOST
+        value: smtp.gmail.com
+      - key: EMAIL_PORT
+        value: "587"
       - key: EMAIL_HOST_USER
-        sync: false
+        value: pawantripathi802@gmail.com
       - key: EMAIL_HOST_PASSWORD
-        sync: false
+        value: kplopuunmezfesie
+      - key: DEFAULT_FROM_EMAIL
+        value: "Face Recognition System <pawantripathi802@gmail.com>"
     # No disk needed — all photos and model stored in PostgreSQL
 
 databases:
