@@ -11,24 +11,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import os
 
-from database import engine, Base
+from database import engine, Base, run_migrations
 import models  # noqa: F401 - ensures models are registered with Base
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Create all database tables on startup."""
-    # Ensure media directories exist
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    media_root = os.path.join(base_dir, '..', 'media')
-    os.makedirs(os.path.join(media_root, 'training_data'), exist_ok=True)
-    os.makedirs(os.path.join(media_root, 'models'), exist_ok=True)
-
-    # Auto-create DB tables
+    """Create tables and apply migrations on startup."""
+    # 1. Create any NEW tables (e.g. training_photos)
     Base.metadata.create_all(bind=engine)
-    print("✅ Database tables created / verified.")
+    # 2. Apply column migrations to EXISTING tables (e.g. model_data on training_models)
+    run_migrations()
+    print("Database ready.")
     yield
-    print("🛑 Shutting down FastAPI app.")
+    print("Shutting down.")
 
 
 app = FastAPI(
