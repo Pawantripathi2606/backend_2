@@ -197,7 +197,9 @@ def recognize_face(
         if img_cv is None:
             return schemas.RecognizeResponse(success=False, error="Could not decode image.")
 
-        # Detect face
+        img_h, img_w = img_cv.shape[:2]
+
+        # Detect face (accurate params for recognition)
         detector = FaceDetector()
         faces = detector.detect_faces(img_cv)
 
@@ -205,12 +207,15 @@ def recognize_face(
             return schemas.RecognizeResponse(
                 success=True,
                 recognized=False,
+                img_w=img_w, img_h=img_h,
                 message="No face detected in the image."
             )
 
         # Pick the largest face for best match
         faces_sorted = sorted(faces, key=lambda f: f[2] * f[3], reverse=True)
         x, y, w, h = faces_sorted[0]
+        bbox = {"x": int(x), "y": int(y), "w": int(w), "h": int(h)}
+
         face_roi = detector.crop_face(img_cv, (x, y, w, h))
         face_gray = detector.preprocess_face(face_roi)
 
@@ -229,7 +234,8 @@ def recognize_face(
                 success=True,
                 recognized=False,
                 confidence=round(confidence, 1),
-                message=f"Face not recognized with sufficient confidence ({confidence:.1f}%)."
+                bbox=bbox, img_w=img_w, img_h=img_h,
+                message=f"Unknown ({confidence:.1f}%)"
             )
 
         # Lookup student
@@ -238,7 +244,8 @@ def recognize_face(
             return schemas.RecognizeResponse(
                 success=True,
                 recognized=False,
-                message=f"No student found with DB id {student_db_id}."
+                bbox=bbox, img_w=img_w, img_h=img_h,
+                message="Unknown"
             )
 
         # Mark attendance
@@ -261,6 +268,7 @@ def recognize_face(
                 attendance_marked=False,
                 already_marked=True,
                 marked_at=existing.time,
+                bbox=bbox, img_w=img_w, img_h=img_h,
                 message=f"Attendance already marked for {student.name} today at {existing.time}."
             )
 
@@ -284,6 +292,7 @@ def recognize_face(
             confidence=round(confidence, 1),
             attendance_marked=True,
             already_marked=False,
+            bbox=bbox, img_w=img_w, img_h=img_h,
             message=f"Attendance marked for {student.name} ({student.student_id})."
         )
 

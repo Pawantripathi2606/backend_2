@@ -143,3 +143,7 @@ class RecognizeResponse(BaseModel):
     marked_at: Optional[str] = None
     message: str = ""
     error: str = ""
+    # Face bounding box — used by frontend to draw overlay rectangle
+    bbox: Optional[dict] = None        # {x, y, w, h} in pixels of the captured frame
+    img_w: Optional[int] = None        # captured frame width
+    img_h: Optional[int] = None        # captured frame height
