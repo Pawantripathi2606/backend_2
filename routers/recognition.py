@@ -245,7 +245,7 @@ def recognize_face(file: UploadFile = File(...), db: Session = Depends(get_db)):
 
         student_db_id, confidence = recognizer.recognize_face(face_gray)
 
-        if confidence < 70:
+        if confidence < 55:
             return schemas.RecognizeResponse(
                 success=True, recognized=False,
                 confidence=round(confidence, 1),
