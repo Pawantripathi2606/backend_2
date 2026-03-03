@@ -9,27 +9,56 @@ import tempfile
 
 
 class FaceDetector:
-    """Utility class for face detection using Haar Cascades."""
+    """
+    Multi-cascade face detector.
+    Uses frontalface_alt2 (better with glasses) + frontalface_default as fallback.
+    """
 
     def __init__(self):
-        cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-        self.face_cascade = cv2.CascadeClassifier(cascade_path)
+        haarcascade_dir = cv2.data.haarcascades
+        # alt2 handles glasses, profiles, and partial faces much better
+        self.cascade_alt2 = cv2.CascadeClassifier(
+            haarcascade_dir + 'haarcascade_frontalface_alt2.xml'
+        )
+        # default as fallback
+        self.cascade_default = cv2.CascadeClassifier(
+            haarcascade_dir + 'haarcascade_frontalface_default.xml'
+        )
 
     def detect_faces(self, image, fast=False):
-        """Detect faces. fast=True is very lenient — catches faces in small frames and poor lighting."""
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        # Histogram equalization improves detection under variable lighting
-        gray = cv2.equalizeHist(gray)
-        if fast:
-            # Very lenient params for bulk capture: fine pyramid, few neighbors, small minSize
-            faces = self.face_cascade.detectMultiScale(
-                gray, scaleFactor=1.1, minNeighbors=2, minSize=(30, 30)
-            )
+        """
+        Detect faces using multiple cascades.
+        Returns list of (x, y, w, h).
+        fast=True: very lenient (for bulk photo capture)
+        fast=False: balanced (for recognition)
+        """
+        if len(image.shape) == 3:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         else:
-            # Accurate params for recognition
-            faces = self.face_cascade.detectMultiScale(
-                gray, scaleFactor=1.3, minNeighbors=5, minSize=(60, 60)
-            )
+            gray = image.copy()
+
+        # Always equalise histogram for better detection under varying light
+        gray = cv2.equalizeHist(gray)
+
+        if fast:
+            # Very lenient — catches faces even at low quality / small size
+            params = dict(scaleFactor=1.1, minNeighbors=2, minSize=(30, 30))
+        else:
+            # Balanced — good accuracy for recognition, still tolerant of glasses
+            params = dict(scaleFactor=1.1, minNeighbors=3, minSize=(40, 40))
+
+        # Try alt2 first (better with glasses)
+        faces = self.cascade_alt2.detectMultiScale(gray, **params)
+
+        # If nothing found, try default cascade as fallback
+        if len(faces) == 0:
+            faces = self.cascade_default.detectMultiScale(gray, **params)
+
+        # If still nothing, try with even looser params
+        if len(faces) == 0:
+            loose = dict(scaleFactor=1.1, minNeighbors=1, minSize=(20, 20))
+            faces = self.cascade_alt2.detectMultiScale(gray, **loose)
+
         return faces
 
     def crop_face(self, image, face_coords):
@@ -37,7 +66,7 @@ class FaceDetector:
         return image[y:y + h, x:x + w]
 
     def preprocess_face(self, face_image, size=(200, 200)):
-        """Resize and convert face to grayscale for recognition."""
+        """Resize and convert face to grayscale for recognition/storage."""
         face_resized = cv2.resize(face_image, size)
         if len(face_resized.shape) == 3:
             face_resized = cv2.cvtColor(face_resized, cv2.COLOR_BGR2GRAY)
@@ -52,11 +81,10 @@ class FaceRecognizer:
         self._loaded = False
 
     def load_model_from_bytes(self, model_bytes: bytes) -> bool:
-        """Load LBPH model from raw XML bytes (stored in DB). Returns True on success."""
+        """Load LBPH model from raw XML bytes. Returns True on success."""
         if not model_bytes:
             return False
         try:
-            # Write to temp file, read with OpenCV, then delete
             with tempfile.NamedTemporaryFile(suffix='.xml', delete=False) as tmp:
                 tmp.write(model_bytes)
                 tmp_path = tmp.name
@@ -71,7 +99,7 @@ class FaceRecognizer:
     def recognize_face(self, face_image):
         """
         Recognize a face. Returns (student_db_id, confidence_percentage).
-        confidence_percentage: 0-100, higher is better.
+        confidence_percentage: 0–100, higher is better.
         """
         if not self._loaded:
             return None, 0.0
@@ -81,12 +109,13 @@ class FaceRecognizer:
         face_image = cv2.resize(face_image, (200, 200))
 
         student_db_id, raw_confidence = self.recognizer.predict(face_image)
+        # LBPH raw confidence: 0 = perfect match, 150+ = no match
         confidence_pct = max(0.0, min(100.0, (1 - (raw_confidence / 150)) * 100))
         return student_db_id, confidence_pct
 
     def train_from_db_rows(self, photo_rows):
         """
-        Train LBPH model from a list of (student_db_id, image_bytes) tuples.
+        Train LBPH from (student_db_id, image_bytes) tuples.
         Returns (success, model_bytes, num_images, num_students, accuracy).
         """
         faces = []
@@ -103,7 +132,6 @@ class FaceRecognizer:
                 ids.append(student_db_id)
             except Exception as e:
                 print(f"Warning: skipping photo for student {student_db_id}: {e}")
-                continue
 
         if len(faces) == 0:
             return False, None, 0, 0, 0.0
@@ -113,7 +141,7 @@ class FaceRecognizer:
         try:
             self.recognizer.train(faces, np.array(ids))
 
-            # Estimate accuracy
+            # Estimate accuracy on a sample
             accuracy = 0.0
             if len(faces) >= 10:
                 correct = sum(
@@ -125,7 +153,7 @@ class FaceRecognizer:
             else:
                 accuracy = 85.0
 
-            # Serialize model to bytes via temp file
+            # Serialize model bytes via temp file
             with tempfile.NamedTemporaryFile(suffix='.xml', delete=False) as tmp:
                 tmp_path = tmp.name
             self.recognizer.write(tmp_path)
@@ -133,7 +161,7 @@ class FaceRecognizer:
                 model_bytes = f.read()
             os.unlink(tmp_path)
 
-            print(f"Training complete! Accuracy: {accuracy:.1f}%, model size: {len(model_bytes)} bytes")
+            print(f"Training complete! Accuracy: {accuracy:.1f}%, model: {len(model_bytes)} bytes")
             return True, model_bytes, len(faces), len(set(ids)), round(accuracy, 1)
 
         except Exception as e:
