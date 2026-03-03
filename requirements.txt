@@ -5,6 +5,9 @@ uvicorn[standard]
 # Database
 sqlalchemy
 
+# PostgreSQL driver (replaces SQLite for production)
+psycopg2-binary
+
 # File upload support
 python-multipart
 

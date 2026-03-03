@@ -1,36 +1,52 @@
 """
-Database configuration using SQLAlchemy with SQLite.
-On Render: set MEDIA_ROOT env var to /opt/render/project/src/media (persistent disk).
-Locally: defaults to fastapi_app/ directory.
+Database configuration using SQLAlchemy.
+
+- Production (Render/Cloud): Set DATABASE_URL env var to your PostgreSQL connection string.
+  Example: postgresql://user:password@host:5432/dbname
+
+- Local development: Falls back to SQLite (no setup needed).
 """
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+from dotenv import load_dotenv
 import os
+
+load_dotenv()  # Load .env file before reading any env vars
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Use MEDIA_ROOT env var if set (Render persistent disk), else local
-MEDIA_ROOT = os.getenv("MEDIA_ROOT", os.path.join(BASE_DIR, "..", "media"))
-os.makedirs(MEDIA_ROOT, exist_ok=True)
+# ── Database URL ───────────────────────────────────────────────────────────────
+# Priority: DATABASE_URL env var (PostgreSQL) → local SQLite fallback
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-DATABASE_URL = f"sqlite:///{os.path.join(MEDIA_ROOT, 'face_recognition.db')}"
+if DATABASE_URL:
+    # Render provides URLs starting with "postgres://" but SQLAlchemy needs "postgresql://"
+    if DATABASE_URL.startswith("postgres://"):
+        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    # PostgreSQL — no special connect_args needed
+    engine = create_engine(DATABASE_URL)
+    print(f"✅ Connected to PostgreSQL database.")
+else:
+    # Local fallback — SQLite
+    MEDIA_ROOT = os.getenv("MEDIA_ROOT", os.path.join(BASE_DIR, "..", "media"))
+    os.makedirs(MEDIA_ROOT, exist_ok=True)
+    SQLITE_URL = f"sqlite:///{os.path.join(MEDIA_ROOT, 'face_recognition.db')}"
+    engine = create_engine(
+        SQLITE_URL,
+        connect_args={"check_same_thread": False}  # Required for SQLite only
+    )
+    print(f"⚠️  DATABASE_URL not set. Using local SQLite: {SQLITE_URL}")
 
-# Create SQLAlchemy engine
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"check_same_thread": False}  # Required for SQLite
-)
-
-# Session factory
+# ── Session factory ────────────────────────────────────────────────────────────
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# Base class for ORM models
+# ── Base class for ORM models ──────────────────────────────────────────────────
 Base = declarative_base()
 
 
 def get_db():
-    """FastAPI dependency to provide a DB session per request."""
+    """FastAPI dependency — provides a DB session per request, auto-closed after."""
     db = SessionLocal()
     try:
         yield db
