@@ -1,4 +1,4 @@
-# Face Recognition Attendance System — FastAPI
+# Face Recognition Attendance System — FastAPI.
 
 A RESTful API backend for automated student attendance marking using facial recognition (LBPH algorithm).
 
